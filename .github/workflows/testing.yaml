@@ -20,13 +20,10 @@ jobs:
         go-version: "1.21.0"
 
     - name: Install dependencies
-      run:
-        - go mod download
+      run: go mod download
 
     - name: Check format
-      run:
-        - gofmt -l .
-        - test -z "$(gofmt -l .)"
+      run: gofmt -l . ; test -z "$(gofmt -l .)"
 
   build:
     runs-on: ubuntu-latest
@@ -41,21 +38,18 @@ jobs:
         go-version: "1.21.0"
 
     - name: Install dependencies
-      run:
-        - go mod download
+      run: go mod download
 
     - name: Run tests
-      run:
-        - go test -v ./
+      run: go test -v ./...
 
-    - name: Build executable
-      run:
-        - go build -o myapp ./cmd/myapp/main.go
+    # - name: Build executable
+    #   run: go build -o myapp ./cmd/myapp/main.go
 
-    - name: Publish artifacts
-      run: |
-        mkdir -p artifacts
-        mv myapp artifacts/
-      artifacts:
-        paths:
-          - artifacts/
+    # - name: Publish artifacts
+    #   run: |
+    #    mkdir -p artifacts
+    #    mv myapp artifacts/
+    #   artifacts:
+    #     paths:
+    #       - artifacts/
