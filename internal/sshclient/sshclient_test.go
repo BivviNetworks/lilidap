@@ -70,7 +70,8 @@ func waitForPort(t *testing.T, port int) {
 	}
 }
 
-func startMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (net.Listener, error) {
+// return a function for stopping the server
+func startMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (func(), error) {
 	log := func(line string) { t.Logf("StartMockSSHServer: %s", line) }
 
 	config.AddHostKey(privateKey)
@@ -119,7 +120,7 @@ func startMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConf
 
 	log("listener accepting connections")
 
-	return listener, nil
+	return func() { listener.Close() }, nil
 }
 
 func WithServer(t *testing.T, config *ssh.ServerConfig, body func(ssh.PublicKey, int)) {
@@ -136,14 +137,16 @@ func WithServer(t *testing.T, config *ssh.ServerConfig, body func(ssh.PublicKey,
 	}
 	t.Logf("Using port: %d", port)
 
-	t.Log("Starting server")
+	t.Log("Initializing WaitGroup")
 	var wg sync.WaitGroup
-	listener, err := startMockSSHServer(t, &wg, config, port, privateKey)
+	defer wg.Wait()
+
+	t.Log("Starting server")
+	stopServer, err := startMockSSHServer(t, &wg, config, port, privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer wg.Wait()
-	defer listener.Close()
+	defer stopServer()
 
 	// when the port opens, turn it over to the work function
 	waitForPort(t, port)
