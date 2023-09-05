@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func waitForPort(t *testing.T, port int) {
 	}
 }
 
-func startMockSSHServer(t *testing.T, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (net.Listener, error) {
+func startMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (net.Listener, error) {
 	log := func(line string) { t.Logf("StartMockSSHServer: %s", line) }
 
 	config.AddHostKey(privateKey)
@@ -81,7 +82,9 @@ func startMockSSHServer(t *testing.T, config *ssh.ServerConfig, port int, privat
 	}
 	log("net.Listen-ing")
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		log := func(line string) { t.Logf("MockSSHServer: %s", line) }
 		for {
 			log("listening")
@@ -134,10 +137,12 @@ func WithServer(t *testing.T, config *ssh.ServerConfig, body func(ssh.PublicKey,
 	t.Logf("Using port: %d", port)
 
 	t.Log("Starting server")
-	listener, err := startMockSSHServer(t, config, port, privateKey)
+	var wg sync.WaitGroup
+	listener, err := startMockSSHServer(t, &wg, config, port, privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer wg.Wait()
 	defer listener.Close()
 
 	// when the port opens, turn it over to the work function
