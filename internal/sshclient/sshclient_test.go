@@ -6,15 +6,27 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-
 	"golang.org/x/crypto/ssh"
 )
 
 const serverAddress = "localhost"
+
+type ValidationResponse struct {
+	HasError bool
+	ErrorMsg string
+	Success  bool
+}
+
+type MaybeAcceptableConfig struct {
+	Config      ssh.ServerConfig
+	WhenValid   ValidationResponse
+	WhenInvalid ValidationResponse
+}
 
 func generateKeys() (ssh.Signer, ssh.PublicKey, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
@@ -58,12 +70,8 @@ func waitForPort(t *testing.T, port int) {
 	}
 }
 
-func startMockSSHServer(t *testing.T, privateKey ssh.Signer, port int) (net.Listener, error) {
+func startMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (net.Listener, error) {
 	log := func(line string) { t.Logf("StartMockSSHServer: %s", line) }
-
-	config := &ssh.ServerConfig{
-		NoClientAuth: true,
-	}
 
 	config.AddHostKey(privateKey)
 
@@ -74,7 +82,9 @@ func startMockSSHServer(t *testing.T, privateKey ssh.Signer, port int) (net.List
 	}
 	log("net.Listen-ing")
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		log := func(line string) { t.Logf("MockSSHServer: %s", line) }
 		for {
 			log("listening")
@@ -112,7 +122,7 @@ func startMockSSHServer(t *testing.T, privateKey ssh.Signer, port int) (net.List
 	return listener, nil
 }
 
-func WithServer(t *testing.T, body func(ssh.PublicKey, int)) {
+func WithServer(t *testing.T, config *ssh.ServerConfig, body func(ssh.PublicKey, int)) {
 	t.Log("WithServer begins")
 	privateKey, pubKey, err := generateKeys()
 	if err != nil {
@@ -127,10 +137,12 @@ func WithServer(t *testing.T, body func(ssh.PublicKey, int)) {
 	t.Logf("Using port: %d", port)
 
 	t.Log("Starting server")
-	listener, err := startMockSSHServer(t, privateKey, port)
+	var wg sync.WaitGroup
+	listener, err := startMockSSHServer(t, &wg, config, port, privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer wg.Wait()
 	defer listener.Close()
 
 	// when the port opens, turn it over to the work function
@@ -140,8 +152,8 @@ func WithServer(t *testing.T, body func(ssh.PublicKey, int)) {
 	body(pubKey, port)
 }
 
-func TestSSHServer(t *testing.T) {
-	WithServer(t, func(pubKey ssh.PublicKey, port int) {
+func TryOneSSHServer(t *testing.T, config *ssh.ServerConfig) {
+	WithServer(t, config, func(pubKey ssh.PublicKey, port int) {
 		pubKeyStr := string(ssh.MarshalAuthorizedKey(pubKey)) // e.g. "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAEQCvhlzUS+GjQzqkJcxPa0Hr\n"
 
 		// just check that the key is reasonable
@@ -150,14 +162,136 @@ func TestSSHServer(t *testing.T) {
 	})
 }
 
-func TestSSHClient(t *testing.T) {
-	WithServer(t, func(pubKey ssh.PublicKey, port int) {
-		t.Log("TestSSHClient: in body")
-		isValid, err := ValidateServerPublicKey(serverAddress, port, pubKey, func(msg string) { t.Log(msg) })
-		if err != nil {
-			t.Fatal(err)
-		}
-		require.True(t, isValid)
+func TryOneSSHClient(t *testing.T, mac MaybeAcceptableConfig) {
 
+	_, wrongPubKey, err := generateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doValidation := func(port int, expectedValid bool, keyToUse ssh.PublicKey) {
+		actualValidity, err := ValidateServerPublicKey(serverAddress, port, keyToUse, func(msg string) { t.Log(msg) })
+		var criteria ValidationResponse
+		var keyLabel string
+		if expectedValid {
+			keyLabel = "correct"
+			criteria = mac.WhenValid
+		} else {
+			keyLabel = "incorrect"
+			criteria = mac.WhenInvalid
+		}
+		t.Logf("Validing the %s key got result: %t", keyLabel, actualValidity)
+
+		if criteria.HasError {
+			require.NotNil(t, err)
+			t.Logf("We expected an error and got one.  Now checking if '%s' = '%s'", criteria.ErrorMsg, err.Error())
+			require.Equal(t, criteria.ErrorMsg, err.Error())
+		} else {
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("We expected no error and didn't get one.  Now checking if %t = %t", criteria.Success, actualValidity)
+			require.Equal(t, criteria.Success, actualValidity)
+		}
+	}
+
+	WithServer(t, &mac.Config, func(pubKey ssh.PublicKey, port int) {
+		doValidation(port, true, pubKey)
+		doValidation(port, false, wrongPubKey)
 	})
+}
+
+var serverConfigs = map[string]MaybeAcceptableConfig{
+	// bad server config: they let the client connect without auth
+	"NoClientAuth": {
+		Config: ssh.ServerConfig{
+			NoClientAuth: true,
+			MaxAuthTries: 1,
+		},
+		WhenValid: ValidationResponse{
+			HasError: true,
+			ErrorMsg: "connection succeeded illegally",
+			Success:  false,
+		},
+		WhenInvalid: ValidationResponse{
+			HasError: false,
+			ErrorMsg: "",
+			Success:  false,
+		},
+	},
+	// bad server config: they require auth but don't accept any methods
+	"NoMethods": {
+		Config: ssh.ServerConfig{
+			NoClientAuth: false,
+			MaxAuthTries: 1,
+		},
+		WhenValid: ValidationResponse{
+			HasError: true,
+			ErrorMsg: "server may not be accepting auth methods",
+			Success:  true,
+		},
+		WhenInvalid: ValidationResponse{
+			HasError: true,
+			ErrorMsg: "server may not be accepting auth methods",
+			Success:  false,
+		},
+	},
+	// good config: can accept password (which we don't attempt to supply)
+	"AuthPassword": {
+		Config: ssh.ServerConfig{
+			NoClientAuth: false,
+			MaxAuthTries: 1,
+			PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+				return nil, fmt.Errorf("password rejected for %q", c.User()) // Reject all password authentication attempts.
+			},
+		},
+		WhenValid: ValidationResponse{
+			HasError: false,
+			ErrorMsg: "",
+			Success:  true,
+		},
+		WhenInvalid: ValidationResponse{
+			HasError: false,
+			ErrorMsg: "",
+			Success:  false,
+		},
+	},
+	// good config: can accept public key (which we don't attempt to supply)
+	"AuthPublicKey": {
+		Config: ssh.ServerConfig{
+			NoClientAuth: false,
+			MaxAuthTries: 1,
+			PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+				return nil, fmt.Errorf("public key rejected for %q", c.User()) // Reject all public key authentication attempts.
+			},
+		},
+		WhenValid: ValidationResponse{
+			HasError: false,
+			ErrorMsg: "",
+			Success:  true,
+		},
+		WhenInvalid: ValidationResponse{
+			HasError: false,
+			ErrorMsg: "",
+			Success:  false,
+		},
+	},
+}
+
+func TestSSHServers(t *testing.T) {
+	for configName, possibleConfig := range serverConfigs {
+		t.Run(configName, func(t *testing.T) {
+			pcc := &possibleConfig.Config
+			TryOneSSHServer(t, pcc)
+		})
+	}
+}
+
+func TestSSHClients(t *testing.T) {
+	for configName, possibleConfig := range serverConfigs {
+		t.Run(configName, func(t *testing.T) {
+			pc := possibleConfig
+			TryOneSSHClient(t, pc)
+		})
+	}
 }

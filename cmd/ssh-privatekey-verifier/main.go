@@ -3,19 +3,21 @@ package main
 import (
 	"flag"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"lilidap/internal/sshclient"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func main() {
 	host := flag.String("host", "127.0.0.1", "SSH server host")
 	port := flag.Int("port", 22, "SSH server port")
-	keyString := flag.String("key", "", "Path to the public key file")
+	keyString := flag.String("key", "", "The public key text, e.g. 'ssh-rsa AAAAB3Nz...'")
+	debug := flag.Bool("debug", false, "Whether to print debug info aimed at the developer")
 
 	flag.Parse()
 
 	if *keyString == "" {
-		fmt.Println("Please provide a valid public key path using the -key flag.")
+		fmt.Println("Please provide a valid public key using the -key flag.")
 		return
 	}
 
@@ -28,15 +30,19 @@ func main() {
 
 	// Use sshclient to validate server's key
 	// Note: You'll need to implement the ValidateServerKey function or similar in your sshclient package.
-	valid, err := sshclient.ValidateServerPublicKey(*host, *port, sshPublicKey, func(msg string) {})
+	valid, err := sshclient.ValidateServerPublicKey(*host, *port, sshPublicKey, func(msg string) {
+		if *debug {
+			fmt.Println(msg)
+		}
+	})
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
 	}
 
 	if valid {
-		fmt.Println("SSH server's key is valid.")
+		fmt.Println("SSH server proved ownership of the private key.")
 	} else {
-		fmt.Println("SSH server's key is invalid.")
+		fmt.Println("SSH server failed to prove ownership of the private key.")
 	}
 }
