@@ -12,6 +12,30 @@ By adding this functionality to an identity management protocol (i.e. LDAP), we 
 
 We will achieve identity management by using SSH keys (possession of a distinct private key) to establish identity instead of a password.  Usernames will be a public SSH key, and passwords will be the host and port of that user's SSH server (which proves possession of the private key).
 
-## Integration
 
-We currently envision this SSH-based management as an SASL mechanism, so that any application that supports SASL can use it.
+## Design
+
+### LDAP DN Structure
+The LDAP server uses a specific DN format to encode user identities:
+- `cn=<base32-username>` : Contains the base32-encoded SSH public key
+- `ou=campers` : Fixed string indicating temporary users
+- `dc=0_1_0` : SemVer version number with underscores
+- `dc=bivvi` : Fixed domain component
+
+### Authentication Flow
+1. Client sends BIND request:
+   - DN contains SSH public key
+   - Password contains host:port of SSH server
+2. Server validates:
+   - Decodes SSH key from DN
+   - Verifies SSH server at host:port has matching key
+3. On success, client can SEARCH to get derived attributes:
+   - uid: Deterministic username from key
+   - mobile: Phone number for VOIP
+   - displayName: Human-readable name
+   - objectClass: inetOrgPerson
+
+### Client Integration
+- VOIP clients use the mobile attribute
+- Chat clients use uid and displayName
+- File sharing uses uid for identity
