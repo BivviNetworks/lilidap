@@ -27,6 +27,15 @@ type MaybeAcceptableConfig struct {
 	WhenInvalid ValidationResponse
 }
 
+// convert a string to a strongly typed key
+func PublicKeyOfString(keyString string) (ssh.PublicKey, error) {
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyString))
+	if err != nil {
+		return nil, err
+	}
+	return pubKey, nil
+}
+
 // different SSH server configs we will try, and how we expect
 //
 //	ValidateServerPublicKey to behave with both valid and invalid keys
