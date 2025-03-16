@@ -3,6 +3,7 @@ package bitset
 import (
 	"fmt"
 	"math/bits"
+	"strings"
 )
 
 // BitSet represents an arbitrary-length array of bits
@@ -213,8 +214,8 @@ func (bs *BitSet) ToInt() int {
 	return val
 }
 
-// String returns a string representation of the BitSet
-func (bs *BitSet) ToString() string {
+// ToString returns a string representation of the BitSet as binary digits
+func (bs *BitSet) ToStringBinary() string {
 	// "0" for false, "1" for true
 	bits := make([]byte, bs.size)
 	for i := 0; i < bs.size; i++ {
@@ -230,6 +231,27 @@ func (bs *BitSet) ToString() string {
 // String returns a string representation of the BitSet
 func (bs *BitSet) String() string {
 	return fmt.Sprintf("BitSet(%d)[0x%X]", bs.size, bs.ToBytes())
+}
+
+// ToStringOctal returns a string representation of the BitSet as octal digits
+func (bs *BitSet) ToStringOctal() string {
+	var result strings.Builder
+
+	// Process bits in reverse order (from end to beginning)
+	for i := bs.size - 3; i >= 0; i -= 3 {
+		slice := bs.Slice(i, i+3)
+		octal := fmt.Sprintf("%d", slice.ToInt())
+		result.WriteString(octal)
+	}
+
+	// Handle any remaining bits at the beginning
+	if bs.size%3 != 0 {
+		slice := bs.Slice(0, bs.size%3)
+		octal := fmt.Sprintf("%d", slice.ToInt())
+		result.WriteString(octal)
+	}
+
+	return result.String()
 }
 
 // Count returns the number of bits set to 1

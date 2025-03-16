@@ -145,12 +145,15 @@ func TestBitSetLogicalOps(t *testing.T) {
 
 func TestStringConversions(t *testing.T) {
 	assert := assert.New(t)
-	a := FromBools([]bool{true, true, false, true, true, false, true, false, true})
+	a := FromBools([]bool{true, true, false, false, true, true, true, false, true})
 
 	// test that the string is formatted correctly
-	expectedRep := "BitSet(9)[0x015B]"
-	assert.Equalf(expectedRep, a.String(), "Expected a.String() == %s, got %s", expectedRep, a.String())
+	expectedRep := "BitSet(9)[0x0173]"
+	assert.Equal(expectedRep, a.String())
 
-	expectedStr := "101011011"
-	assert.Equalf(expectedStr, a.ToString(), "Expected a.ToString() == %s, got %s", expectedStr, a.ToString())
+	expectedStr := "101110011"
+	assert.Equal(expectedStr, a.ToStringBinary())
+
+	expectedOct := "563"
+	assert.Equal(expectedOct, a.ToStringOctal())
 }
