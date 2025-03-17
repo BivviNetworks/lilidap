@@ -116,25 +116,26 @@ var SampleServerConfigs = map[string]MaybeAcceptableConfig{
 	},
 }
 
-func GenerateKeys(keyLength int) (ssh.Signer, ssh.PublicKey, error) {
+// Generates a private key and public key pair and return the signer with them
+func GenerateKeys(keyLength int) (ssh.Signer, ssh.PublicKey, *rsa.PrivateKey, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, keyLength)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	signer, err := ssh.NewSignerFromKey(privateKey)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return signer, signer.PublicKey(), nil
+	return signer, signer.PublicKey(), privateKey, nil
 }
 
 // return a function for stopping the server
-func StartMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, privateKey ssh.Signer) (func(), error) {
+func StartMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConfig, port int, keySigner ssh.Signer) (func(), error) {
 	log := func(line string) { t.Logf("StartMockSSHServer: %s", line) }
 
-	config.AddHostKey(privateKey)
+	config.AddHostKey(keySigner)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
@@ -185,7 +186,7 @@ func StartMockSSHServer(t *testing.T, wg *sync.WaitGroup, config *ssh.ServerConf
 
 func WithSSHServer(t *testing.T, keyLength int, config *ssh.ServerConfig, body func(ssh.PublicKey, int)) {
 	t.Log("WithServer begins")
-	privateKey, pubKey, err := GenerateKeys(keyLength)
+	signer, pubKey, _, err := GenerateKeys(keyLength)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +203,7 @@ func WithSSHServer(t *testing.T, keyLength int, config *ssh.ServerConfig, body f
 	defer wg.Wait()
 
 	t.Log("Starting server")
-	stopServer, err := StartMockSSHServer(t, &wg, config, port, privateKey)
+	stopServer, err := StartMockSSHServer(t, &wg, config, port, signer)
 	if err != nil {
 		t.Fatal(err)
 	}

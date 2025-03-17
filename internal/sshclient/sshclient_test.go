@@ -28,7 +28,7 @@ func TryOneSSHServer(t *testing.T, config *ssh.ServerConfig) {
 // start a server and ensure that a client behaves as expected
 func TryOneSSHClient(t *testing.T, mac ssh_helpers.MaybeAcceptableConfig) {
 
-	_, wrongPubKey, err := ssh_helpers.GenerateKeys(privKeyLength)
+	_, wrongPubKey, _, err := ssh_helpers.GenerateKeys(privKeyLength)
 	if err != nil {
 		t.Fatal(err)
 	}
