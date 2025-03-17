@@ -2,6 +2,7 @@ package bitset
 
 import (
 	"fmt"
+	"math"
 	"math/bits"
 	"strings"
 )
@@ -252,6 +253,15 @@ func (bs *BitSet) ToStringOctal() string {
 	}
 
 	return result.String()
+}
+
+// Return the number of decimal digits needed to represent the number of bits
+func (bs *BitSet) ToStringDecimal() string {
+	// 2^n is the maximum value representable with n bits
+	// log10(2^n) = n * log10(2)
+	// We add 1 because log gives us one less than the number of digits
+	digits := int(math.Floor(float64(bs.size)*math.Log10(2))) + 1
+	return fmt.Sprintf("%0*d", digits, bs.ToInt())
 }
 
 // Count returns the number of bits set to 1

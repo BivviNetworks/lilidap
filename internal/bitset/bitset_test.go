@@ -148,12 +148,21 @@ func TestStringConversions(t *testing.T) {
 	a := FromBools([]bool{true, true, false, false, true, true, true, false, true})
 
 	// test that the string is formatted correctly
-	expectedRep := "BitSet(9)[0x0173]"
-	assert.Equal(expectedRep, a.String())
+	assert.Equal("BitSet(9)[0x0173]", a.String())
+	assert.Equal("101110011", a.ToStringBinary())
+	assert.Equal("563", a.ToStringOctal())
+	assert.Equal("371", a.ToStringDecimal()) // it is a total coincidence that this is 173 in hex backwards
 
-	expectedStr := "101110011"
-	assert.Equal(expectedStr, a.ToStringBinary())
+	// test string padding when representing decimals
+	bs := FromBytes([]byte{0x01, 0x6D}, 9)
+	assert.Equal("555", bs.ToStringOctal())
+	assert.Equal("365", bs.ToStringDecimal())
 
-	expectedOct := "563"
-	assert.Equal(expectedOct, a.ToStringOctal())
+	bs2 := FromBytes([]byte{0x01, 0x6D}, 12)
+	assert.Equal("0555", bs2.ToStringOctal())
+	assert.Equal("0365", bs2.ToStringDecimal())
+
+	bs3 := FromBytes([]byte{0x0F, 0xFF}, 12)
+	assert.Equal("7777", bs3.ToStringOctal())
+	assert.Equal("4095", bs3.ToStringDecimal())
 }
