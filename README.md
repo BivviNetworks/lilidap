@@ -12,6 +12,57 @@ By adding this functionality to an identity management protocol (i.e. LDAP), we 
 
 We will achieve identity management by using SSH keys (possession of a distinct private key) to establish identity instead of a password. Users authenticate by providing their **full SSH public key** as the username and the **host:port of their SSH server** as the password. The LDAP server validates key ownership by connecting to that SSH server.
 
+## Running the Server
+
+### Usage Examples
+
+**Production (default):**
+```bash
+sudo ./lilidap
+# Listens on: 0.0.0.0:389 (all interfaces, standard LDAP port)
+# Note: Port 389 requires root/administrator privileges
+```
+
+**Testing mode (no root needed):**
+```bash
+./lilidap --host localhost --port 3389
+# Listens on: localhost:3389 (safe for testing)
+```
+
+**Custom port on all interfaces:**
+```bash
+./lilidap --port 10389
+# Listens on: 0.0.0.0:10389 (all interfaces, custom port)
+```
+
+**Specific network interface:**
+```bash
+./lilidap --host 192.168.1.100
+# Listens on: 192.168.1.100:389 (specific IP, default port)
+```
+
+**Full customization:**
+```bash
+./lilidap --host 10.0.0.5 --port 8389
+# Listens on: 10.0.0.5:8389 (specific IP and port)
+```
+
+### Testing the Server
+
+Once the server is running, test it with `ldapwhoami`:
+
+```bash
+# Get your SSH public key
+MY_KEY=$(cat ~/.ssh/id_rsa.pub)
+
+# Test authentication (adjust host:port as needed)
+ldapwhoami -H ldap://localhost:3389 \
+  -D "cn=${MY_KEY},ou=campers,dc=0_1_0,dc=bivvi" \
+  -w "127.0.0.1:22"
+```
+
+See [TESTING.md](TESTING.md) for comprehensive testing instructions.
+
 ## Design
 
 ### Three Types of Identifiers
