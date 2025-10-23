@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"lilidap/internal/derived"
 	"lilidap/internal/sshclient"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -50,6 +51,10 @@ type LDAPServer struct {
 	listenAddr string
 }
 
+func getKeyInfo(pubKey ssh.PublicKey) (keyType, fingerprint string) {
+	return pubKey.Type(), ssh.FingerprintSHA256(pubKey)
+}
+
 // NewServer creates a new LDAP server
 func NewServer(listenAddr string, sshPubKey ssh.PublicKey) *LDAPServer {
 	server := ldap.NewServer()
@@ -65,6 +70,7 @@ func NewServer(listenAddr string, sshPubKey ssh.PublicKey) *LDAPServer {
 	routes := ldap.NewRouteMux()
 	routes.Bind(s.handleBind)
 	routes.Search(s.handleSearch)
+	routes.Extended(s.handleExtended).RequestName("1.3.6.1.4.1.4203.1.11.3")
 	server.Handle(routes)
 
 	return s
@@ -72,10 +78,14 @@ func NewServer(listenAddr string, sshPubKey ssh.PublicKey) *LDAPServer {
 
 func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 	bindReq := m.GetBindRequest()
+	clientAddr := m.Client.Addr().String()
+
+	log.Printf("🔐 BIND attempt from %s", clientAddr)
 
 	// Always ensure we send a response
 	defer func() {
 		if r := recover(); r != nil {
+			log.Printf("❌ BIND FAILED: Internal error: %v", r)
 			res := ldap.NewBindResponse(ldap.LDAPResultOperationsError)
 			res.SetDiagnosticMessage(fmt.Sprintf("Internal error: %v", r))
 			w.Write(res)
@@ -86,6 +96,7 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 	hostPort := bindReq.AuthenticationSimple().String()
 	host, portStr, err := net.SplitHostPort(hostPort)
 	if err != nil {
+		log.Printf("❌ BIND REJECTED: Invalid host:port format: %v", err)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(fmt.Sprintf("Invalid host:port format: %v", err))
 		w.Write(res)
@@ -94,6 +105,7 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
+		log.Printf("❌ BIND REJECTED: Invalid port: %v", err)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(fmt.Sprintf("Invalid port: %v", err))
 		w.Write(res)
@@ -101,18 +113,19 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 	}
 
 	if port < 1 || port > 65535 {
+		log.Printf("❌ BIND REJECTED: Port out of range: %d", port)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(fmt.Sprintf("Invalid port: %d", port))
 		w.Write(res)
 		return
 	}
 
-	// Get client address from connection
-	clientAddr := m.Client.Addr().String()
+	// Get client host from connection
 	clientHost, _, _ := net.SplitHostPort(clientAddr)
 
 	// Ensure the client host matches the host part of the password
 	if clientHost != host {
+		log.Printf("❌ BIND REJECTED: Client host %s != password host %s", clientHost, host)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage("Client host does not match the host in the password")
 		w.Write(res)
@@ -125,6 +138,7 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 	dn := string(bindReq.Name())
 	cn, err := extractCN(dn)
 	if err != nil {
+		log.Printf("❌ BIND REJECTED: Invalid DN format: %v", err)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(fmt.Sprintf("Invalid DN format: %v", err))
 		w.Write(res)
@@ -133,11 +147,16 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cn))
 	if err != nil {
+		log.Printf("❌ BIND REJECTED: Invalid SSH key: %v", err)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(fmt.Sprintf("Invalid SSH key: %v", err))
 		w.Write(res)
 		return
 	}
+
+	// Get key fingerprint for logging
+	keyType, fingerprint := getKeyInfo(pubKey)
+	log.Printf("   Validating %s key %s against SSH server %s:%d", keyType, fingerprint, host, port)
 
 	// Validate key against SSH server
 	var sshDebugMsg string = ""
@@ -147,24 +166,30 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 
 	valid, err := sshclient.ValidateServerPublicKey(host, port, pubKey, onDebug)
 	if err != nil || !valid {
+		log.Printf("❌ BIND REJECTED: SSH validation failed: %s", sshDebugMsg)
 		res := ldap.NewBindResponse(ldap.LDAPResultInvalidCredentials)
 		res.SetDiagnosticMessage(sshDebugMsg)
 		w.Write(res)
 		return
 	}
 
+	log.Printf("✅ BIND ACCEPTED: %s key %s authenticated successfully", keyType, fingerprint)
 	res := ldap.NewBindResponse(ldap.LDAPResultSuccess)
 	w.Write(res)
 }
 
 func (s *LDAPServer) handleSearch(w ldap.ResponseWriter, m *ldap.Message) {
 	searchReq := m.GetSearchRequest()
+	clientAddr := m.Client.Addr().String()
+
+	log.Printf("🔍 SEARCH request from %s", clientAddr)
 
 	// Extract full SSH public key from CN in base DN
 	// The CN contains the full SSH key in OpenSSH authorized_keys format
 	dn := string(searchReq.BaseObject())
 	cn, err := extractCN(dn)
 	if err != nil {
+		log.Printf("❌ SEARCH REJECTED: Invalid DN format: %v", err)
 		res := ldap.NewSearchResultDoneResponse(ldap.LDAPResultInvalidDNSyntax)
 		w.Write(res)
 		return
@@ -172,6 +197,7 @@ func (s *LDAPServer) handleSearch(w ldap.ResponseWriter, m *ldap.Message) {
 
 	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cn))
 	if err != nil {
+		log.Printf("❌ SEARCH REJECTED: Invalid SSH key: %v", err)
 		res := ldap.NewSearchResultDoneResponse(ldap.LDAPResultInvalidDNSyntax)
 		w.Write(res)
 		return
@@ -179,6 +205,10 @@ func (s *LDAPServer) handleSearch(w ldap.ResponseWriter, m *ldap.Message) {
 
 	// Generate derived attributes
 	attrs := derived.FromPublicKey(pubKey)
+
+	keyType, fingerprint := getKeyInfo(pubKey)
+	log.Printf("   Returning attributes for %s key %s (uid=%s, displayName=%s)",
+		keyType, fingerprint, attrs.Username(), attrs.DisplayName("en"))
 
 	// Return entry with derived attributes
 	e := ldap.NewSearchResultEntry(dn)
@@ -199,8 +229,37 @@ func (s *LDAPServer) handleSearch(w ldap.ResponseWriter, m *ldap.Message) {
 
 	w.Write(e)
 
+	log.Printf("✅ SEARCH COMPLETED: Returned 1 entry")
 	res := ldap.NewSearchResultDoneResponse(ldap.LDAPResultSuccess)
 	w.Write(res)
+}
+
+func (s *LDAPServer) handleExtended(w ldap.ResponseWriter, m *ldap.Message) {
+	extReq := m.GetExtendedRequest()
+	clientAddr := m.Client.Addr().String()
+
+	requestOID := string(extReq.RequestName())
+	log.Printf("🔧 EXTENDED operation %s from %s", requestOID, clientAddr)
+
+	// "Who Am I?" Extended Operation (RFC 4532)
+	// OID: 1.3.6.1.4.1.4203.1.11.3
+	const whoamiOID = "1.3.6.1.4.1.4203.1.11.3"
+
+	if requestOID != whoamiOID {
+		log.Printf("❌ EXTENDED REJECTED: Operation %s not supported", requestOID)
+		res := ldap.NewExtendedResponse(ldap.LDAPResultUnwillingToPerform)
+		res.SetDiagnosticMessage(fmt.Sprintf("Extended operation %s not supported", requestOID))
+		w.Write(res)
+		return
+	}
+
+	log.Printf("✅ WHOAMI ACCEPTED: Returning success")
+	// Return the bound DN in the response
+	res := ldap.NewExtendedResponse(ldap.LDAPResultSuccess)
+	res.SetResponseName(whoamiOID)
+	res.SetDiagnosticMessage("TODO: the DN")
+	w.Write(res)
+
 }
 
 // extractCN extracts the CN value from a DN string
