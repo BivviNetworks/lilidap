@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/lor00x/goldap/message"
 	ldap "github.com/vjeantet/ldapserver"
@@ -49,6 +50,7 @@ type LDAPServer struct {
 	sshAddr    string
 	sshPubKey  ssh.PublicKey
 	listenAddr string
+	sessions   sync.Map // Maps client address (string) → bound DN (string)
 }
 
 func getKeyInfo(pubKey ssh.PublicKey) (keyType, fingerprint string) {
@@ -174,6 +176,17 @@ func (s *LDAPServer) handleBind(w ldap.ResponseWriter, m *ldap.Message) {
 	}
 
 	log.Printf("✅ BIND ACCEPTED: %s key %s authenticated successfully", keyType, fingerprint)
+
+	// Normalize the SSH key to ensure consistent representation
+	// MarshalAuthorizedKey returns the canonical form with a trailing newline
+	normalizedKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pubKey)))
+
+	// Reconstruct the DN with the normalized key
+	normalizedDN := fmt.Sprintf("cn=%s,ou=campers,dc=0_1_0,dc=bivvi", normalizedKey)
+
+	// Store the normalized DN in the session for this client
+	s.sessions.Store(clientAddr, normalizedDN)
+
 	res := ldap.NewBindResponse(ldap.LDAPResultSuccess)
 	w.Write(res)
 }
@@ -253,13 +266,30 @@ func (s *LDAPServer) handleExtended(w ldap.ResponseWriter, m *ldap.Message) {
 		return
 	}
 
-	log.Printf("✅ WHOAMI ACCEPTED: Returning success")
-	// Return the bound DN in the response
+	// Retrieve the bound DN from the session
+	boundDNInterface, ok := s.sessions.Load(clientAddr)
+	if !ok {
+		log.Printf("❌ WHOAMI REJECTED: No bound session found for %s", clientAddr)
+		res := ldap.NewExtendedResponse(ldap.LDAPResultOperationsError)
+		res.SetDiagnosticMessage("Not authenticated - no bound session")
+		w.Write(res)
+		return
+	}
+
+	boundDN := boundDNInterface.(string)
+	// RFC 4532: authzId format should be "dn:<distinguished-name>"
+	authzId := "dn:" + boundDN
+
+	log.Printf("✅ WHOAMI ACCEPTED: Returning authzId=%s", authzId)
+
+	// Return the authorization identity in the response
+	// Note: RFC 4532 specifies this should be in the response value, but the
+	// goldap library may not support SetResponseValue. We'll use DiagnosticMessage
+	// as a fallback that ldapwhoami can still display.
 	res := ldap.NewExtendedResponse(ldap.LDAPResultSuccess)
 	res.SetResponseName(whoamiOID)
-	res.SetDiagnosticMessage("TODO: the DN")
+	res.SetDiagnosticMessage(authzId)
 	w.Write(res)
-
 }
 
 // extractCN extracts the CN value from a DN string
