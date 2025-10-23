@@ -46,6 +46,9 @@ jobs:
     - name: Build lilidap server
       run: go build -o lilidap ./cmd/lilidap/main.go
 
+    - name: Build lilidap-identity manager
+      run: go build -o lilidap-identity ./cmd/lilidap-identity/*.go
+
     - name: Build private key verifier executable
       run: go build -o ssh-privatekey-verifier ./cmd/ssh-privatekey-verifier/main.go
 
